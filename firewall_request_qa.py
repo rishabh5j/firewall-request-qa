@@ -4,12 +4,6 @@ from ipaddress import ip_network
 import pandas
 
 
-AZURE_SUPERNET_RANGES = [
-    "10.200.0.0/16",
-    "10.201.0.0/16",
-    "10.202.0.0/16",
-    "10.203.0.0/16"
-]
 FW_MASTER_SHEET = "M1K - FW Rule - Tracker.xlsx"
 SOURCE_DESC_COLUMN_NAME = "Source IP Description"
 SOURCE_IP_COLUMN_NAME = "Source IP"
@@ -20,8 +14,14 @@ PORT_COLUMN_NAME = "Port"
 FLOW_DESC_COLUMN_NAME = "Flow Description"
 REQUESTER_COLUMN_NAME = "Requester"
 STATUS_COLUMN_NAME = "Status"
+AZURE_SUPERNET_RANGES = [
+    "10.200.0.0/16",
+    "10.201.0.0/16",
+    "10.202.0.0/16",
+    "10.203.0.0/16"
+]
 
-
+# Lambda function to build existing rules from the excel name passed
 build_existing_rules = lambda excel_name: pandas.read_excel(excel_name)
 
 
@@ -32,6 +32,18 @@ def get_args():
     parser.add_argument('--protocol', required=True, help="protocol")
     parser.add_argument('--destination_port', required=True, help="destination port. Comma seperated values accepted.")
     return parser.parse_args()
+
+
+def is_azure_to_azure_communication(rule_to_validate):
+    is_source_subnet_of_azure_ranges = False
+    is_destination_subnet_of_azure_ranges = False
+    for network_range in AZURE_SUPERNET_RANGES:
+        is_source_subnet_of_azure_ranges = ip_network(rule_to_validate.source_ip).subnet_of(ip_network(network_range))
+        is_source_subnet_of_azure_ranges = ip_network(rule_to_validate.destination_ip).subnet_of(ip_network(network_range))
+
+        if is_source_subnet_of_azure_ranges and is_source_subnet_of_azure_ranges:
+            return True
+    return False
 
 
 def does_rule_matches_arg(rule_to_validate, fw_dataset_rule):
@@ -47,6 +59,7 @@ def does_rule_matches_arg(rule_to_validate, fw_dataset_rule):
             is_destination_overlapping and
             is_protocol_same and
             is_port_same)
+
 
 def firewall_request_validator():
     try:
@@ -68,8 +81,13 @@ def firewall_request_validator():
             result = does_rule_matches_arg(args, fw_dataset_rule)
             if result:
                 raise Exception(f"Overlap exists with rule :{fw_dataset_rule}")
-        
-        print("No overlap exists. Rule qualifies to be implemented.")
+
+        print("No overlap exists. Validating if Azure to Azure Communication.")
+
+        if is_azure_to_azure_communication(args):
+            raise Exception(f"The source and destination both belong to Azure ranges :{AZURE_SUPERNET_RANGES}, Not allowed to implement")
+
+        print ("Not a Azure to Azure communication.\r\n\r\nCan be allowed!!!")
 
     except Exception as e:
         print (f"Exception raised:{e}")
