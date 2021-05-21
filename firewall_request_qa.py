@@ -1,8 +1,9 @@
+# exception raise with details on what is the overlap
+# take excel as an input for validating
+
 import argparse
-import ipaddress
 from ipaddress import ip_network
 import pandas
-
 
 FW_MASTER_SHEET = "M1K - FW Rule - Tracker.xlsx"
 SOURCE_DESC_COLUMN_NAME = "Source IP Description"
