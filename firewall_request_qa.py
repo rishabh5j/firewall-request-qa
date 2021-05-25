@@ -1,4 +1,4 @@
-# exception raise with details on what is the overlap
+# suggestion from Amit K: xception raise with details on what is the overlap
 # take excel as an input for validating
 
 import argparse
