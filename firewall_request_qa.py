@@ -16,6 +16,7 @@ PORT_COLUMN_NAME = "Port"
 FLOW_DESC_COLUMN_NAME = "Flow Description"
 REQUESTER_COLUMN_NAME = "Requester"
 STATUS_COLUMN_NAME = "Status"
+SPECIAL_CHAR_STRIP_LIST = [" ", "\n", "\r\n"]
 AZURE_SUPERNET_RANGES = [
     "10.200.0.0/16",
     "10.201.0.0/16",
@@ -39,20 +40,42 @@ def get_args():
 def is_azure_to_azure_communication(fw_rule_to_be_validated):
     is_source_subnet_of_azure_ranges = False
     is_destination_subnet_of_azure_ranges = False
-    for network_range in AZURE_SUPERNET_RANGES:
-        is_source_subnet_of_azure_ranges = ip_network(fw_rule_to_be_validated[SOURCE_IP_COLUMN_NAME]).subnet_of(ip_network(network_range))
-        is_source_subnet_of_azure_ranges = ip_network(fw_rule_to_be_validated[DEST_IP_COLUMN_NAME]).subnet_of(ip_network(network_range))
 
-        if is_source_subnet_of_azure_ranges and is_source_subnet_of_azure_ranges:
+    # is any of the source range overlapping with Azure ranges
+    for cidr in fw_rule_to_be_validated[SOURCE_IP_COLUMN_NAME]:
+        is_source_subnet_of_azure_ranges = any(cidr.subnet_of(ip_network(network_range)) for network_range in AZURE_SUPERNET_RANGES)
+
+    for cidr in fw_rule_to_be_validated[DEST_IP_COLUMN_NAME]:    
+        is_destination_subnet_of_azure_ranges = any(cidr.subnet_of(ip_network(network_range)) for network_range in AZURE_SUPERNET_RANGES)
+
+    if is_source_subnet_of_azure_ranges and is_destination_subnet_of_azure_ranges:
             return True
     return False
 
 
 def does_rule_matches_arg(rule_to_validate, fw_dataset_rule):
     print(f"matching {rule_to_validate} againts {fw_dataset_rule}")
-    is_source_overlapping = ip_network(rule_to_validate[SOURCE_IP_COLUMN_NAME]).subnet_of(ip_network(fw_dataset_rule[SOURCE_IP_COLUMN_NAME]))
-    is_destination_overlapping = ip_network(rule_to_validate[DEST_IP_COLUMN_NAME]).subnet_of(ip_network(fw_dataset_rule[DEST_IP_COLUMN_NAME]))
+
+    # Verify if protocol matches
     is_protocol_same = rule_to_validate[PROTOCOL_COLUMN_NAME].lower() == fw_dataset_rule[PROTOCOL_COLUMN_NAME].lower()
+    if not is_protocol_same:
+        return False
+
+    # Verify if the source network is overlapping
+    is_source_overlapping = False
+    for cidr in rule_to_validate[SOURCE_IP_COLUMN_NAME]:
+        is_source_overlapping = any(cidr.subnet_of(network) for network in fw_dataset_rule[SOURCE_IP_COLUMN_NAME])
+        if is_source_overlapping:
+            break
+    
+    # Verify if the destination network is overlapping
+    is_destination_overlapping = False
+    for cidr in rule_to_validate[DEST_IP_COLUMN_NAME]:
+        is_destination_overlapping = any(cidr.subnet_of(network) for network in fw_dataset_rule[DEST_IP_COLUMN_NAME])
+        if is_destination_overlapping:
+            break
+
+    # Verify if Port number is matching
     is_port_same = False
     for port_number in rule_to_validate[PORT_COLUMN_NAME]:
         if port_number in fw_dataset_rule[PORT_COLUMN_NAME]:
@@ -60,7 +83,6 @@ def does_rule_matches_arg(rule_to_validate, fw_dataset_rule):
 
     return (is_source_overlapping and
             is_destination_overlapping and
-            is_protocol_same and
             is_port_same)
 
 def verify_firewall_rule_overlap(fw_rule_to_be_validated, fw_dataset):
@@ -73,6 +95,20 @@ def verify_firewall_rule_overlap(fw_rule_to_be_validated, fw_dataset):
             print(f"\r\nOverlap with rule at SerialNo:{fw_dataset_rule[SERIAL_NUMBER_COLUMN_NAME]}\r\n"),
             return f"Overlap with rule at SerialNo:{fw_dataset_rule[SERIAL_NUMBER_COLUMN_NAME]}"
     return None
+
+def parse_dataset_elements(firewall_rule_dataset):
+    # Convert comma seperated port numbers to list of integers before matching
+    firewall_rule_dataset[PORT_COLUMN_NAME] = [int(port) for port in str(firewall_rule_dataset[PORT_COLUMN_NAME]).split(",")]
+
+    # Parse source subnets into list of ipaddress.ip_network elements
+    firewall_rule_dataset[SOURCE_IP_COLUMN_NAME] = [ip_network(subnet.strip(" ".join(SPECIAL_CHAR_STRIP_LIST))) 
+                                                        for subnet in firewall_rule_dataset[SOURCE_IP_COLUMN_NAME].split(",")]
+    
+    # Parse destination subnets into list of ipaddress.ip_network elements
+    firewall_rule_dataset[DEST_IP_COLUMN_NAME] = [ip_network(subnet.strip(" ".join(SPECIAL_CHAR_STRIP_LIST))) 
+                                                            for subnet in firewall_rule_dataset[DEST_IP_COLUMN_NAME].split(",")]
+    
+    return (firewall_rule_dataset)
 
 def format_console_output():
     print ("\r\n" + "+-"*50 + "\r\n")
@@ -89,8 +125,8 @@ def firewall_request_validator():
         fw_dataset = build_existing_rules(FW_MASTER_SHEET, MASTER_SHEET_NAME).to_dict(orient="records")
 
         for fw_dataset_rule in fw_dataset:
-            # Convert comma seperated port numbers to list of integers before matching
-            fw_dataset_rule[PORT_COLUMN_NAME] = [int(port) for port in str(fw_dataset_rule[PORT_COLUMN_NAME]).split(",")]
+            # Parse the source networks, destination networks and port fields
+            fw_dataset_rule = parse_dataset_elements(fw_dataset_rule)
 
         # track row number to write the final result in Result column
         row_number = -1
@@ -100,8 +136,15 @@ def firewall_request_validator():
             # Format console output
             format_console_output()
 
-            # Convert comma seperated port numbers to list of integers before matching
-            fw_rule_to_be_validated[PORT_COLUMN_NAME] = [int(port) for port in str(fw_rule_to_be_validated[PORT_COLUMN_NAME]).split(",")]
+            # Validate if ICMP communication which is already allowed bi-directional
+            if fw_rule_to_be_validated[PROTOCOL_COLUMN_NAME].lower()=="icmp":
+                return_msg = f"ICMP communication cannot be request as it is already allowed."
+                new_dataset_with_result.at[row_number, "Results"] = return_msg
+                print(f"{fw_rule_to_be_validated} {return_msg}")
+                continue
+            
+            # Parse the source networks, destination networks and port fields
+            fw_rule_to_be_validated = parse_dataset_elements(fw_rule_to_be_validated)
 
             # Validate if the rule to be validated overlaps with any rule in MasterProtected sheet.
             does_firewall_rule_overlaps = verify_firewall_rule_overlap(fw_rule_to_be_validated, fw_dataset)
