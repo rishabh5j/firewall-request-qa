@@ -98,7 +98,9 @@ def verify_firewall_rule_overlap(fw_rule_to_be_validated, fw_dataset):
 
 def parse_dataset_elements(firewall_rule_dataset):
     # Convert comma seperated port numbers to list of integers before matching
-    firewall_rule_dataset[PORT_COLUMN_NAME] = [int(port) for port in str(firewall_rule_dataset[PORT_COLUMN_NAME]).split(",")]
+    temp_list_of_ports = [(lambda sub: range(sub[0], sub[-1] + 1))(list(map(int, ele.split('-')))) for ele in str(firewall_rule_dataset[PORT_COLUMN_NAME]).split(', ')] 
+    firewall_rule_dataset[PORT_COLUMN_NAME] = [b for a in temp_list_of_ports for b in a]
+    #firewall_rule_dataset[PORT_COLUMN_NAME] = [int(port) for port in str(firewall_rule_dataset[PORT_COLUMN_NAME]).split(",")]
 
     # Parse source subnets into list of ipaddress.ip_network elements
     firewall_rule_dataset[SOURCE_IP_COLUMN_NAME] = [ip_network(subnet.strip(" ".join(SPECIAL_CHAR_STRIP_LIST))) 
